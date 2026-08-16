@@ -185,22 +185,135 @@
     // ---------- компонент экрана со списком выпусков ----------
 
     function RadioTComponent(object) {
-        var activity = object && object.activity;
+        var self = this;
         var scroll = new Lampa.Scroll({ mask: true, over: true });
-        var html = $('<div class="radio-t-component"></div>');
-        var body = $('<div class="items-line radio-t-list"></div>');
-        var status = $('<div class="radio-t-status">Radio-T</div>');
         var episodes = [];
         var audio = null;
         var current_index = -1;
+        var last = null;
+        var destroyed = false;
 
-        function setLoader(state) {
-            if (activity && activity.loader) activity.loader(state);
+        scroll.body().addClass('radio-t-list');
+
+        // ---------- жизненный цикл ----------
+
+        this.create = function () {
+            this.activity.loader(true);
+            load();
+            return this.render();
+        };
+
+        this.render = function () {
+            return scroll.render();
+        };
+
+        this.start = function () {
+            if (Lampa.Activity.active().activity !== this.activity) return;
+            attachController();
+            Lampa.Controller.toggle('content');
+        };
+
+        this.pause = function () {};
+        this.stop = function () {};
+
+        this.destroy = function () {
+            destroyed = true;
+
+            if (audio) {
+                audio.pause();
+                audio.remove();
+                audio = null;
+            }
+
+            scroll.destroy();
+            episodes = null;
+        };
+
+        // ---------- загрузка ----------
+
+        function load() {
+            fetchEpisodes(
+                function (data) {
+                    if (destroyed) return;
+                    self.activity.loader(false);
+                    episodes = data;
+                    renderList();
+                },
+                function () {
+                    if (destroyed) return;
+                    self.activity.loader(false);
+                    Lampa.Noty.show('Не удалось загрузить RSS radio-t');
+                    showEmpty();
+                }
+            );
         }
 
-        function toggleActivity() {
-            if (activity && activity.toggle) activity.toggle();
+        // ---------- рендер списка ----------
+
+        function clearList() {
+            scroll.body().empty();
         }
+
+        function renderList() {
+            clearList();
+
+            if (!episodes.length) return showEmpty();
+
+            episodes.forEach(function (ep, index) {
+                var item = $(
+                    '<div class="radio-t-item selector">' +
+                        '<div class="radio-t-item__title">' + escapeHtml(ep.title) + '</div>' +
+                        '<div class="radio-t-item__date">' + escapeHtml(ep.date) + '</div>' +
+                    '</div>'
+                );
+
+                item.on('hover:focus', function (e) { last = e.target; });
+                item.on('hover:enter', function () { togglePause(index); });
+
+                scroll.append(item);
+            });
+
+            attachController();
+            focusFirst();
+        }
+
+        function showEmpty() {
+            clearList();
+
+            var empty = Lampa.Template ? Lampa.Template.get('list_empty', {}) : null;
+
+            if (empty && empty.find) {
+                empty.find('.empty__descr').text('Не удалось загрузить RSS radio-t');
+                scroll.append(empty);
+            } else {
+                scroll.append($('<div class="radio-t-empty">Не удалось загрузить RSS radio-t</div>'));
+            }
+
+            attachController();
+            focusFirst();
+        }
+
+        // ---------- навигация/фокус ----------
+
+        function attachController() {
+            Lampa.Controller.add('content', {
+                toggle: function () {
+                    Lampa.Controller.collectionSet(scroll.render());
+                    Lampa.Controller.collectionFocus(last || false, scroll.render());
+                },
+                back: function () {
+                    if (audio) audio.pause();
+                    Lampa.Activity.backward();
+                }
+            });
+        }
+
+        function focusFirst() {
+            last = scroll.render().find('.selector').first()[0] || last;
+            Lampa.Controller.toggle('content');
+        }
+
+        // ---------- воспроизведение ----------
 
         function ensureAudio() {
             if (audio) return audio;
@@ -221,17 +334,13 @@
             return audio;
         }
 
-        function updateStatus(text) {
-            status.text(text);
-        }
-
         function highlightPlaying() {
-            body.find('.radio-t-item').removeClass('radio-t-item--playing');
-            body.find('.radio-t-item').eq(current_index).addClass('radio-t-item--playing');
+            scroll.render().find('.radio-t-item').removeClass('radio-t-item--playing');
+            scroll.render().find('.radio-t-item').eq(current_index).addClass('radio-t-item--playing');
         }
 
         function playEpisode(index) {
-            if (index < 0 || index >= episodes.length) return;
+            if (!episodes || index < 0 || index >= episodes.length) return;
 
             var ep = episodes[index];
             var player = ensureAudio();
@@ -243,7 +352,6 @@
             });
 
             Lampa.Noty.show('▶ ' + ep.title);
-            updateStatus('Сейчас играет: ' + ep.title);
             highlightPlaying();
         }
 
@@ -252,88 +360,10 @@
 
             if (current_index === index && !player.paused) {
                 player.pause();
-                updateStatus('Пауза: ' + episodes[index].title);
             } else {
                 playEpisode(index);
             }
         }
-
-        function buildItem(ep, index) {
-            var item = $(
-                '<div class="radio-t-item selector" data-index="' + index + '">' +
-                    '<div class="radio-t-item__title">' + escapeHtml(ep.title) + '</div>' +
-                    '<div class="radio-t-item__date">' + escapeHtml(ep.date) + '</div>' +
-                '</div>'
-            );
-
-            item.on('hover:enter', function () {
-                togglePause(index);
-            });
-
-            return item;
-        }
-
-        this.create = function () {
-            setLoader(true);
-
-            fetchEpisodes(
-                function (data) {
-                    episodes = data;
-
-                    episodes.forEach(function (ep, index) {
-                        body.append(buildItem(ep, index));
-                    });
-
-                    html.append(status);
-                    scroll.append(body);
-                    html.append(scroll.render());
-
-                    setLoader(false);
-                    toggleActivity();
-                },
-                function () {
-                    setLoader(false);
-                    Lampa.Noty.show('Не удалось загрузить RSS radio-t');
-                    if (Lampa.Activity && Lampa.Activity.backward) Lampa.Activity.backward();
-                }
-            );
-
-            return this.render();
-        };
-
-        this.render = function (js) {
-            return js ? html : $(html);
-        };
-
-        this.start = function () {
-            Lampa.Controller.add('content', {
-                toggle: function () {
-                    Lampa.Controller.collectionSet(scroll.render());
-                    Lampa.Controller.collectionFocus(false, scroll.render());
-                },
-                back: function () {
-                    if (audio) audio.pause();
-                    Lampa.Activity.backward();
-                }
-            });
-
-            Lampa.Controller.toggle('content');
-        };
-
-        this.pause = function () {};
-        this.stop = function () {};
-
-        this.destroy = function () {
-            if (audio) {
-                audio.pause();
-                audio.remove();
-                audio = null;
-            }
-
-            scroll.destroy();
-            html.remove();
-            body.remove();
-        };
     }
 
     // ---------- стили ----------
@@ -341,13 +371,13 @@
     function addStyles() {
         var style = document.createElement('style');
         style.innerHTML =
-            '.radio-t-status{padding:0 1em 1em;font-size:1.3em;opacity:.8}' +
-            '.radio-t-list{display:flex;flex-direction:column}' +
+            '.radio-t-list{display:flex;flex-direction:column;padding:1em}' +
             '.radio-t-item{padding:1em;margin-bottom:.5em;border-radius:.5em;background:rgba(255,255,255,.05)}' +
             '.radio-t-item.focus{background:rgba(255,255,255,.15)}' +
             '.radio-t-item--playing{border-left:.3em solid #fff}' +
             '.radio-t-item__title{font-size:1.2em;margin-bottom:.3em}' +
-            '.radio-t-item__date{font-size:.9em;opacity:.6}';
+            '.radio-t-item__date{font-size:.9em;opacity:.6}' +
+            '.radio-t-empty{padding:2em;font-size:1.3em;opacity:.7;text-align:center}';
         document.head.appendChild(style);
     }
 
