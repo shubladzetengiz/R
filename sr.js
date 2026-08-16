@@ -1,22 +1,24 @@
 /*!
  * Lampa plugin: radio-t
- * Добавляет в левое меню Lampa пункт "radio-t", который открывает список
- * выпусков подкаста Radio-T из RSS (http://feeds.rucast.net/radio-t) и
- * проигрывает выбранный выпуск в аудиоплеере.
+ * Добавляет в левое меню Lampa пункт "radio-t". Плагин сначала читает
+ * плейлист sr.m3u (лежащий в том же репозитории, рядом со скриптом),
+ * берёт из него ссылку на RSS подкаста Radio-T, затем загружает и
+ * разбирает сам RSS и проигрывает выбранный выпуск в аудиоплеере.
+ *
+ * Файлы:
+ *   sr.js  - этот файл (логика плагина)
+ *   sr.m3u - плейлист с одной строкой: ссылка на RSS
+ *            (https://feeds.rucast.net/radio-t)
  *
  * Установка:
- *   1. Залейте этот файл в свой репозиторий на GitHub (например, через
- *      GitHub Pages), чтобы получить прямую ссылку вида:
- *      https://<user>.github.io/<repo>/radio-t.js
- *   2. В Lampa: Настройки -> Расширения -> Добавить плагин -> вставьте ссылку.
+ *   Оба файла должны лежать в одном репозитории/папке. В Lampa добавляется
+ *   только sr.js (Настройки -> Расширения -> Добавить плагин), а sr.m3u
+ *   подтягивается автоматически по тому же пути.
  *
  * Примечание про CORS:
- *   Сервер feeds.rucast.net, как и большинство RSS-хостингов, обычно не
- *   отдаёт заголовки CORS. Внутри нативного Android-приложения Lampa запросы
- *   идут через собственный сетевой слой и CORS не мешает. В веб-версии
- *   (браузер / lampa.mx) браузер может заблокировать прямой запрос — на этот
- *   случай ниже предусмотрен резервный публичный CORS-прокси. Если он
- *   недоступен/заблокирован у вас в регионе, замените CORS_PROXY на свой.
+ *   RSS-сервер обычно не отдаёт заголовки CORS, поэтому если прямой запрос
+ *   из браузера не проходит, плагин последовательно пробует резервные
+ *   публичные CORS-прокси.
  */
 (function () {
     'use strict';
@@ -24,13 +26,22 @@
     if (window.radio_t_plugin_installed) return;
     window.radio_t_plugin_installed = true;
 
-    // Важно: именно https, иначе браузер/WebView блокирует запрос как
-    // "смешанный контент", когда сама Lampa открыта по https (lampa.mx и т.п.)
-    var RSS_URL = 'https://feeds.rucast.net/radio-t';
+    // Адрес этого самого скрипта — нужен, чтобы вычислить путь к sr.m3u,
+    // лежащему рядом с ним в том же репозитории/папке. Обязательно читаем
+    // его синхронно в самом начале, до каких-либо async-операций.
+    var CURRENT_SCRIPT_SRC = (document.currentScript && document.currentScript.src) || '';
 
-    // Цепочка резервных CORS-прокси на случай, если у RSS-сервера нет
-    // заголовков CORS и браузерная версия Lampa не может сделать запрос
-    // напрямую. Пробуем по очереди, пока один не сработает.
+    // Фолбэк, если по каким-то причинам не удалось определить путь к
+    // соседнему sr.m3u (например, скрипт был вставлен через eval).
+    // Подставьте сюда прямую ссылку на свой sr.m3u, если понадобится.
+    var M3U_URL_FALLBACK = '';
+
+    // Если и m3u не удалось прочитать вообще ни откуда — используем этот
+    // RSS-адрес как последний резерв.
+    var RSS_URL_FALLBACK = 'https://feeds.rucast.net/radio-t';
+
+    // Резервные CORS-прокси, пробуются по очереди, если прямой запрос
+    // (что к m3u, что к RSS) не проходит из-за отсутствия CORS-заголовков.
     var CORS_PROXIES = [
         function (url) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url); },
         function (url) { return 'https://corsproxy.io/?' + encodeURIComponent(url); },
@@ -40,7 +51,82 @@
     var COMPONENT_NAME = 'radio_t';
     var MENU_TITLE = 'radio-t';
 
-    // ---------- вспомогательные функции ----------
+    // ---------- сеть ----------
+
+    function requestOnce(url, onSuccess, onError) {
+        var network = new Lampa.Reguest();
+        network.timeout(15000);
+        network.silent(url, onSuccess, onError, false);
+    }
+
+    // Пробует: 1) прямой запрос, 2) по очереди резервные CORS-прокси.
+    // isValid(text) решает, считать ли ответ успешным (например, что это
+    // не пустая страница ошибки прокси).
+    function fetchWithFallback(url, isValid, onSuccess, onError) {
+        var urls = [url].concat(CORS_PROXIES.map(function (build) { return build(url); }));
+        var i = 0;
+
+        function tryNext() {
+            if (i >= urls.length) {
+                onError();
+                return;
+            }
+
+            requestOnce(
+                urls[i++],
+                function (text) {
+                    if (isValid(text)) onSuccess(text);
+                    else tryNext();
+                },
+                tryNext
+            );
+        }
+
+        tryNext();
+    }
+
+    // ---------- m3u ----------
+
+    function guessM3uUrl() {
+        if (CURRENT_SCRIPT_SRC) return CURRENT_SCRIPT_SRC.replace(/[^\/]+$/, 'sr.m3u');
+        return M3U_URL_FALLBACK;
+    }
+
+    // Достаёт первую непустую, некомментарийную строку m3u — это и есть
+    // ссылка на RSS.
+    function parseM3u(text) {
+        var lines = (text || '').split(/\r?\n/);
+
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (!line || line.charAt(0) === '#') continue;
+            return line;
+        }
+
+        return '';
+    }
+
+    function resolveRssUrl(onReady) {
+        var m3uUrl = guessM3uUrl();
+
+        if (!m3uUrl) {
+            onReady(RSS_URL_FALLBACK);
+            return;
+        }
+
+        fetchWithFallback(
+            m3uUrl,
+            function (text) { return !!parseM3u(text); },
+            function (text) {
+                onReady(parseM3u(text) || RSS_URL_FALLBACK);
+            },
+            function () {
+                onReady(RSS_URL_FALLBACK);
+            }
+        );
+    }
+
+    // ---------- rss ----------
 
     function escapeHtml(str) {
         if (Lampa.Utils && Lampa.Utils.escapeHtml) return Lampa.Utils.escapeHtml(str || '');
@@ -59,7 +145,7 @@
         var items = [];
 
         try {
-            var xml = new DOMParser().parseFromString(xmlText, 'text/xml');
+            var xml = new DOMParser().parseFromString(xmlText || '', 'text/xml');
 
             if (xml.querySelector('parsererror')) return items;
 
@@ -85,41 +171,15 @@
         return items;
     }
 
-    function requestOnce(url, onSuccess, onError) {
-        var network = new Lampa.Reguest();
-        network.timeout(15000);
-        network.silent(url, onSuccess, onError, false);
-    }
-
-    // Пробуем: 1) прямой запрос к RSS, 2) по очереди резервные CORS-прокси.
-    // Останавливаемся на первом варианте, который вернул валидный список
-    // выпусков.
     function fetchEpisodes(onSuccess, onError) {
-        var urls = [RSS_URL].concat(CORS_PROXIES.map(function (build) { return build(RSS_URL); }));
-        var i = 0;
-
-        function tryNext() {
-            if (i >= urls.length) {
-                onError();
-                return;
-            }
-
-            var url = urls[i++];
-
-            requestOnce(
-                url,
-                function (text) {
-                    var episodes = parseRss(text);
-                    if (episodes.length) onSuccess(episodes);
-                    else tryNext();
-                },
-                function () {
-                    tryNext();
-                }
+        resolveRssUrl(function (rssUrl) {
+            fetchWithFallback(
+                rssUrl,
+                function (text) { return parseRss(text).length > 0; },
+                function (text) { onSuccess(parseRss(text)); },
+                onError
             );
-        }
-
-        tryNext();
+        });
     }
 
     // ---------- компонент экрана со списком выпусков ----------
