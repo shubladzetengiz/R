@@ -1,44 +1,27 @@
 (function () {
-    'function' == typeof define && define.amd ? define(start) : start();
+    'use strict';
 
-    function start() {
-        // Ждем полной загрузки Lampa
-        if (window.appready) {
-            initPlugin();
-        } else {
-            Lampa.Listener.follow('app', function (e) {
-                if (e.type === 'ready') initPlugin();
-            });
-        }
-    }
+    function startPlugin() {
+        // 1. Подготавливаем иконку радио (SVG)
+        var radioIcon = '<svg height="24" viewBox="0 0 24 24" width="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9c3.9 3.9 3.9 10.2 0 14.1"/></svg>';
 
-    function initPlugin() {
-        // Добавляем пункт "SelfRadio" в левое меню Lampa
-        Lampa.Menu.add({
-            title: 'SelfRadio',
-            icon: '<svg height="24" viewBox="0 0 24 24" width="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>',
-            component: 'selfradio',
-            page: 'selfradio'
-        });
-
-        // Создаем компонент страницы
+        // 2. Регистрируем компонент страницы
         Lampa.Component.add('selfradio', function () {
             var comp = this;
             var scroll = new Lampa.Scroll({ mask: true, over: true });
-            var files = new Lampa.Files();
 
             this.create = function () {
                 this.activity.loader(true);
 
-                // Если плейлист лежит локально (на устройстве), укажите путь
-                // Например: 'http://localhost:8080/playlist.m3u' или путь в локальной сети
+                // Укажите ссылку на ваш M3U/M3U8 плейлист
                 var playlistUrl = 'http://localhost:8080/playlist.m3u';
 
+                // Используем встроенный Native Request
                 Lampa.Reguest.native(playlistUrl, function (data) {
                     comp.build(parseM3U(data));
                 }, function () {
-                    Lampa.Noty.show('Ошибка загрузки M3U плейлиста');
                     comp.activity.loader(false);
+                    Lampa.Noty.show('SelfRadio: Ошибка загрузки плейлиста');
                 }, false, { dataType: 'text' });
 
                 return scroll.render();
@@ -47,8 +30,8 @@
             this.build = function (tracks) {
                 this.activity.loader(false);
 
-                if (!tracks.length) {
-                    var empty = Lampa.Template.get('empty', { title: 'Плейлист пуст' });
+                if (!tracks || !tracks.length) {
+                    var empty = Lampa.Template.get('empty', { title: 'Плейлист пуст или не найден' });
                     scroll.append(empty);
                     return;
                 }
@@ -57,7 +40,7 @@
                     var item = Lampa.Template.get('button', { title: track.name });
                     
                     item.on('hover:enter', function () {
-                        // Запуск аудиопотока через встроенный плеер Lampa
+                        // Запуск проигрывания аудиочерез плеер Lampa
                         Lampa.Player.play({
                             title: track.name,
                             url: track.url,
@@ -76,9 +59,15 @@
                         Lampa.Controller.collectionSet(scroll.render());
                         Lampa.Controller.collectionFocus(false, scroll.render());
                     },
-                    left: function () { Lampa.Controller.toggle('menu'); },
-                    up: function () { Lampa.Navigator.move('up'); },
-                    down: function () { Lampa.Navigator.move('down'); }
+                    left: function () { 
+                        Lampa.Controller.toggle('menu'); 
+                    },
+                    up: function () { 
+                        Lampa.Navigator.move('up'); 
+                    },
+                    down: function () { 
+                        Lampa.Navigator.move('down'); 
+                    }
                 });
                 Lampa.Controller.toggle('content');
             };
@@ -89,11 +78,20 @@
                 scroll.destroy();
             };
         });
+
+        // 3. Добавляем пункт в левое меню Lampa
+        Lampa.Menu.add({
+            title: 'SelfRadio',
+            icon: radioIcon,
+            component: 'selfradio',
+            page: 'selfradio'
+        });
     }
 
-    // Простой парсер M3U
+    // Простой M3U-парсер
     function parseM3U(content) {
-        var lines = content.split('\n');
+        if (!content) return [];
+        var lines = content.split(/\r?\n/);
         var result = [];
         var currentName = '';
 
@@ -114,4 +112,16 @@
         }
         return result;
     }
+
+    // 4. Безопасный запуск после полной инициализации Lampa
+    if (window.appready) {
+        startPlugin();
+    } else {
+        Lampa.Listener.follow('app', function (e) {
+            if (e.type === 'ready') {
+                startPlugin();
+            }
+        });
+    }
 })();
+ц
