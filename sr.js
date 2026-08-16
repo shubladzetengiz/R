@@ -1,17 +1,19 @@
 (function () {
     'use strict';
 
-    function RadioTPlugin() {
-        var rss_url = 'https://api.allorigins.win/raw?url=' + encodeURIComponent('http://feeds.rucast.net/radio-t');
+    // Уникальное имя компонента во избежание конфликтов
+    var PLUGIN_NAME = 'radio_t_plugin';
+    var RSS_URL = 'https://api.allorigins.win/raw?url=' + encodeURIComponent('http://feeds.rucast.net/radio-t');
 
+    function RadioTPlugin() {
         this.start = function () {
-            Lampa.Component.add('radio_t', RadioComponent);
+            Lampa.Component.add(PLUGIN_NAME, RadioComponent);
 
             var addMenuItem = function () {
-                if ($('.menu .menu__list [data-action="radio_t"]').length) return;
+                if ($('.menu .menu__list [data-action="' + PLUGIN_NAME + '"]').length) return;
 
                 var item = $(
-                    '<div class="menu__item selector" data-action="radio_t">' +
+                    '<div class="menu__item selector" data-action="' + PLUGIN_NAME + '">' +
                         '<div class="menu__ico">' +
                             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.83a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>' +
                         '</div>' +
@@ -22,7 +24,7 @@
                 item.on('hover:enter', function () {
                     Lampa.Activity.push({
                         title: 'Радио-Т',
-                        component: 'radio_t',
+                        component: PLUGIN_NAME,
                         page: 1
                     });
                 });
@@ -30,9 +32,13 @@
                 $('.menu .menu__list').append(item);
             };
 
-            Lampa.Listener.follow('app', function (e) {
-                if (e.type === 'ready') addMenuItem();
-            });
+            if (window.appready) {
+                addMenuItem();
+            } else {
+                Lampa.Listener.follow('app', function (e) {
+                    if (e.type === 'ready') addMenuItem();
+                });
+            }
         };
 
         function RadioComponent(object) {
@@ -41,16 +47,13 @@
             var html    = $('<div class="category-full"></div>');
             var body    = $('<div class="category-full__body"></div>');
             var _this   = this;
-
-            // Нативный аудио-плеер
-            var audio = window.radioTAudioPlayer || new Audio();
-            window.radioTAudioPlayer = audio;
+            var audio   = new Audio();
 
             this.create = function () {
                 this.activity.loader(true);
 
                 $.ajax({
-                    url: rss_url,
+                    url: RSS_URL,
                     type: 'GET',
                     dataType: 'xml',
                     success: function (xml) {
@@ -105,12 +108,13 @@
                     card.find('.card__img').attr('src', episode.img);
                     card.addClass('selector');
 
-                    // Клик по выпуску — запуск прямого аудиовещания
                     card.on('hover:enter', function () {
                         audio.src = episode.url;
                         audio.play();
                         
-                        Lampa.Noty.show('Воспроизведение: ' + episode.title);
+                        if (Lampa.Noty) {
+                            Lampa.Noty.show('Воспроизведение: ' + episode.title);
+                        }
                     });
 
                     body.append(card);
@@ -128,7 +132,7 @@
             };
 
             this.start = function () {
-                Lampa.Controller.add('content', {
+                Lampa.Controller.add(PLUGIN_NAME, {
                     toggle: function () {
                         Lampa.Controller.collectionSet(scroll.render());
                         if (items.length) {
@@ -143,12 +147,20 @@
                     }
                 });
 
-                Lampa.Controller.toggle('content');
+                Lampa.Controller.toggle(PLUGIN_NAME);
             };
 
             this.pause = function () {};
             this.stop = function () {};
+            
+            // Корректное уничтожение компонента при переходе на другие разделы Lampa
             this.destroy = function () {
+                try {
+                    audio.pause();
+                    audio.src = '';
+                } catch (e) {}
+
+                Lampa.Controller.remove(PLUGIN_NAME);
                 scroll.destroy();
                 html.remove();
                 items = [];
@@ -156,11 +168,8 @@
         }
     }
 
-    if (window.appready) {
+    if (!window.radio_t_plugin_inited) {
+        window.radio_t_plugin_inited = true;
         new RadioTPlugin().start();
-    } else {
-        Lampa.Listener.follow('app', function (e) {
-            if (e.type === 'ready') new RadioTPlugin().start();
-        });
     }
 })();
