@@ -1,5 +1,5 @@
 //name: Радио-Т RSS
-//version: 1.1.0
+//version: 1.1.1
 //author: lampa
 //description: Подкасты Радио-Т из RSS-ленты feeds.rucast.net/radio-t
 
@@ -8,10 +8,11 @@
 
     var NAME = 'Радио-Т';
     var COMPONENT = 'rt_podcast';
-    var FEED_URLS = [
-        'http://feeds.rucast.net/radio-t',
-        'https://feeds.rucast.net/radio-t'
-    ];
+    
+    // XOZO Используем HTTPS и проксирование для обхода CORS в веб-версии
+    var FEED_URL = 'https://feeds.rucast.net/radio-t';
+    var PROXY_URL = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(FEED_URL);
+    
     var COVER = 'https://radio-t.com/images/cover.jpg';
 
     function parseFeed(text) {
@@ -131,27 +132,36 @@
         };
 
         this.fetch = function () {
-            var attempt = 0;
-            var go = (function () {
-                if (attempt >= FEED_URLS.length) {
-                    this.fail('Не удалось загрузить ленту Радио-Т');
+            var self = this;
+
+            // Попытка 1: Через встроенный менеджер запросов Lampa (silent автоматически подключает прокси Lampa)
+            network.silent(FEED_URL, function (text) {
+                var parsed = parseFeed(text);
+                if (parsed && parsed.length) {
+                    list = parsed;
+                    self.build();
+                } else {
+                    self.fetchBackup();
+                }
+            }, function () {
+                self.fetchBackup();
+            }, false, { dataType: 'text' });
+        };
+
+        this.fetchBackup = function () {
+            var self = this;
+            // Попытка 2: Резервный публичный CORS-прокси
+            network.silent(PROXY_URL, function (text) {
+                var parsed = parseFeed(text);
+                if (!parsed || !parsed.length) {
+                    self.fail('В ленте нет эпизодов');
                     return;
                 }
-                var url = FEED_URLS[attempt++];
-                network.native(url, (function (text) {
-                    var parsed = parseFeed(text);
-                    if (!parsed || !parsed.length) {
-                        this.fail('В ленте нет эпизодов');
-                        return;
-                    }
-                    list = parsed;
-                    this.build();
-                }).bind(this), (function () {
-                    go();
-                }).bind(this), false, { dataType: 'text' });
-            }).bind(this);
-
-            go();
+                list = parsed;
+                self.build();
+            }, function () {
+                self.fail('Не удалось загрузить ленту Радио-Т');
+            }, false, { dataType: 'text' });
         };
 
         this.build = function () {
