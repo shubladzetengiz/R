@@ -1,13 +1,12 @@
 (function () {
     'use strict';
 
-    // Уникальное имя компонента во избежание конфликтов
-    var PLUGIN_NAME = 'radio_t_plugin';
+    var PLUGIN_NAME = 'sr_plugin';
     var RSS_URL = 'https://api.allorigins.win/raw?url=' + encodeURIComponent('http://feeds.rucast.net/radio-t');
 
-    function RadioTPlugin() {
+    function SRPlugin() {
         this.start = function () {
-            Lampa.Component.add(PLUGIN_NAME, RadioComponent);
+            Lampa.Component.add(PLUGIN_NAME, SRComponent);
 
             var addMenuItem = function () {
                 if ($('.menu .menu__list [data-action="' + PLUGIN_NAME + '"]').length) return;
@@ -41,7 +40,7 @@
             }
         };
 
-        function RadioComponent(object) {
+        function SRComponent(object) {
             var scroll  = new Lampa.Scroll({mask: true, over: true});
             var items   = [];
             var html    = $('<div class="category-full"></div>');
@@ -153,7 +152,6 @@
             this.pause = function () {};
             this.stop = function () {};
             
-            // Корректное уничтожение компонента при переходе на другие разделы Lampa
             this.destroy = function () {
                 try {
                     audio.pause();
@@ -168,8 +166,8 @@
         }
     }
 
-    if (!window.radio_t_plugin_inited) {
-        window.radio_t_plugin_inited = true;
-        new RadioTPlugin().start();
+    if (!window.sr_plugin_inited) {
+        window.sr_plugin_inited = true;
+        new SRPlugin().start();
     }
 })();
