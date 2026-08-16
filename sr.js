@@ -270,9 +270,7 @@
 
     // ---------- пункт левого меню ----------
 
-    function addMenuButton() {
-        if ($('.menu [data-action="' + COMPONENT_NAME + '"]').length) return;
-
+    function buildMenuButton() {
         var button = $(
             '<li class="menu__item selector" data-action="' + COMPONENT_NAME + '">' +
                 '<div class="menu__ico">' +
@@ -293,11 +291,52 @@
             });
         });
 
-        var menu = Lampa.Menu.render();
-        var settingsItem = menu.find('[data-action="settings"]');
+        return button;
+    }
 
-        if (settingsItem.length) settingsItem.before(button);
-        else menu.append(button);
+    function addMenuButton() {
+        try {
+            var menu = Lampa.Menu.render();
+
+            if (!menu || !menu.length) return false;
+            if (menu.find('[data-action="' + COMPONENT_NAME + '"]').length) return true;
+
+            var button = buildMenuButton();
+            var settingsItem = menu.find('[data-action="settings"]');
+
+            if (settingsItem.length) settingsItem.before(button);
+            else menu.append(button);
+
+            return true;
+        } catch (e) {
+            console.error('[radio-t] menu insert error', e);
+            return false;
+        }
+    }
+
+    // Lampa в некоторых сборках пересобирает левое меню уже после события
+    // app:ready, из-за чего вставленный слишком рано пункт пропадает.
+    // Поэтому пробуем несколько раз с задержкой, а дальше следим за меню
+    // через MutationObserver и восстанавливаем пункт, если он исчез.
+    function ensureMenuButtonPersists() {
+        var menu = Lampa.Menu.render();
+        if (!menu || !menu.length || !window.MutationObserver) return;
+
+        var observer = new MutationObserver(function () {
+            addMenuButton();
+        });
+
+        observer.observe(menu.get(0), { childList: true });
+    }
+
+    function scheduleMenuButtonInsertion() {
+        addMenuButton();
+
+        [300, 1000, 2000, 4000].forEach(function (delay) {
+            setTimeout(addMenuButton, delay);
+        });
+
+        setTimeout(ensureMenuButtonPersists, 1000);
     }
 
     // ---------- запуск плагина ----------
@@ -306,11 +345,15 @@
         addStyles();
         Lampa.Component.add(COMPONENT_NAME, RadioTComponent);
 
-        if (window.appready) addMenuButton();
-        else {
+        if (window.appready) {
+            scheduleMenuButtonInsertion();
+        } else {
             Lampa.Listener.follow('app', function (e) {
-                if (e.type === 'ready') addMenuButton();
+                if (e.type === 'ready') scheduleMenuButtonInsertion();
             });
+
+            // на случай, если событие 'ready' уже прошло до подписки
+            setTimeout(scheduleMenuButtonInsertion, 1500);
         }
     }
 
