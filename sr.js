@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    // Функция загрузки и парсинга RSS
+    // Фxozoункция загрузки и парсинга RSS
     function fetchRadioT(callback) {
         // RSS-лента Радио-Т
         var rssUrl = 'https://radio-t.com/rss/';
