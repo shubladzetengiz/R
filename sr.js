@@ -24,8 +24,19 @@
     if (window.radio_t_plugin_installed) return;
     window.radio_t_plugin_installed = true;
 
-    var RSS_URL = 'http://feeds.rucast.net/radio-t';
-    var CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+    // Важно: именно https, иначе браузер/WebView блокирует запрос как
+    // "смешанный контент", когда сама Lampa открыта по https (lampa.mx и т.п.)
+    var RSS_URL = 'https://feeds.rucast.net/radio-t';
+
+    // Цепочка резервных CORS-прокси на случай, если у RSS-сервера нет
+    // заголовков CORS и браузерная версия Lampa не может сделать запрос
+    // напрямую. Пробуем по очереди, пока один не сработает.
+    var CORS_PROXIES = [
+        function (url) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url); },
+        function (url) { return 'https://corsproxy.io/?' + encodeURIComponent(url); },
+        function (url) { return 'https://r.jina.ai/' + url; }
+    ];
+
     var COMPONENT_NAME = 'radio_t';
     var MENU_TITLE = 'radio-t';
 
@@ -37,13 +48,6 @@
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;');
-    }
-
-    function requestUrl() {
-        // На Android (нативное приложение) дергаем RSS напрямую,
-        // в браузере — через CORS-прокси.
-        var isNative = Lampa.Platform && Lampa.Platform.is && Lampa.Platform.is('android');
-        return isNative ? RSS_URL : (CORS_PROXY + encodeURIComponent(RSS_URL));
     }
 
     function textOf(node, selector) {
@@ -81,22 +85,41 @@
         return items;
     }
 
-    function fetchEpisodes(onSuccess, onError) {
+    function requestOnce(url, onSuccess, onError) {
         var network = new Lampa.Reguest();
-
         network.timeout(15000);
-        network.silent(
-            requestUrl(),
-            function (text) {
-                var episodes = parseRss(text);
-                if (episodes.length) onSuccess(episodes);
-                else onError();
-            },
-            function () {
+        network.silent(url, onSuccess, onError, false);
+    }
+
+    // Пробуем: 1) прямой запрос к RSS, 2) по очереди резервные CORS-прокси.
+    // Останавливаемся на первом варианте, который вернул валидный список
+    // выпусков.
+    function fetchEpisodes(onSuccess, onError) {
+        var urls = [RSS_URL].concat(CORS_PROXIES.map(function (build) { return build(RSS_URL); }));
+        var i = 0;
+
+        function tryNext() {
+            if (i >= urls.length) {
                 onError();
-            },
-            false
-        );
+                return;
+            }
+
+            var url = urls[i++];
+
+            requestOnce(
+                url,
+                function (text) {
+                    var episodes = parseRss(text);
+                    if (episodes.length) onSuccess(episodes);
+                    else tryNext();
+                },
+                function () {
+                    tryNext();
+                }
+            );
+        }
+
+        tryNext();
     }
 
     // ---------- компонент экрана со списком выпусков ----------
