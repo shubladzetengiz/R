@@ -1,87 +1,61 @@
-//name: Радио-Т RSS
-//version: 1.1.1
-//author: lampa
-//description: Подкасты Радио-Т из RSS-ленты feeds.rucast.net/radio-t
+//name: RSS Аудио Плеер
+//version: 1.0.0
+//author: Custom
+//description: Парсер RSS-лент с воспроизведением аудио во встроенном плеере Lampa
 
 (function () {
     'use strict';
 
-    var NAME = 'Радио-Т';
-    var COMPONENT = 'rt_podcast';
+    var NAME = 'Аудио RSS';
+    var COMPONENT = 'rss_audio_player';
     
-    // XOZO Используем HTTPS и проксирование для обхода CORS в веб-версии
-    var FEED_URL = 'https://feeds.rucast.net/radio-t';
-    var PROXY_URL = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(FEED_URL);
-    
-    var COVER = 'https://radio-t.com/images/cover.jpg';
+    // -------------------------------------------------------------
+    // tengulia Укажите ссылку на вашу RSS-ленту и обложку по умолчанию
+    var RSS_URL = 'https://feeds.rucast.net/radio-t'; 
+    var DEFAULT_COVER = 'https://lampa.mx/img/img_broken.svg';
+    // -------------------------------------------------------------
+
+    var PROXY_URL = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(RSS_URL);
 
     function parseFeed(text) {
-        text = text || '';
-
-        if (typeof DOMParser != 'undefined') {
-            return parseFeedDom(text);
-        }
-        return parseFeedRegex(text);
-    }
-
-    function parseFeedDom(text) {
         var list = [];
+        if (!text) return list;
+
         var doc;
         try {
             doc = new DOMParser().parseFromString(text, 'text/xml');
         } catch (e) {
             return list;
         }
+
         if (!doc || !doc.querySelectorAll) return list;
 
         var nodes = doc.querySelectorAll('item');
 
         for (var i = 0; i < nodes.length; i++) {
             var node = nodes[i];
-            var enc = node.getElementsByTagName('enclosure')[0];
-            var url = enc ? enc.getAttribute('url') : '';
+            
+            // Ищем аудио в теге <enclosure url="..."> или <media:content url="...">
+            var enc = node.getElementsByTagName('enclosure')[0] || node.getElementsByTagName('media:content')[0];
+            var audioUrl = enc ? enc.getAttribute('url') : '';
 
-            if (!url) continue;
+            if (!audioUrl) continue;
+
+            // Извлечение обложки выпуска (если есть)
+            var imgEl = node.getElementsByTagName('itunes:image')[0] || node.getElementsByTagName('media:thumbnail')[0];
+            var image = imgEl ? imgEl.getAttribute('href') || imgEl.getAttribute('url') : DEFAULT_COVER;
 
             list.push({
-                title: childText(node, 'title'),
+                title: childText(node, 'title') || 'Без названия',
                 date: childText(node, 'pubDate'),
-                duration: childText(node, 'itunes\\:duration') || childText(node, 'duration'),
+                duration: childText(node, 'itunes:duration') || childText(node, 'duration'),
                 description: childText(node, 'description'),
-                url: url
+                url: audioUrl,
+                cover: image
             });
         }
 
         return list;
-    }
-
-    function parseFeedRegex(text) {
-        var list = [];
-        var re = /<item>([\s\S]*?)<\/item>/g;
-        var m;
-
-        while ((m = re.exec(text))) {
-            var block = m[1];
-            var enc = block.match(/<enclosure[^>]*\surl="([^"]+)"/);
-            var url = enc ? enc[1] : '';
-
-            if (!url) continue;
-
-            list.push({
-                title: grepTag(block, 'title'),
-                date: grepTag(block, 'pubDate'),
-                duration: grepTag(block, 'itunes\\:duration') || grepTag(block, 'duration'),
-                description: grepTag(block, 'description'),
-                url: url
-            });
-        }
-
-        return list;
-    }
-
-    function grepTag(block, tag) {
-        var m = block.match(new RegExp('<' + tag + '>([\\s\\S]*?)<\\/' + tag + '>'));
-        return m ? m[1].replace(/<!\[CDATA\[|\]\]>/g, '').trim() : '';
     }
 
     function childText(node, tag) {
@@ -108,7 +82,7 @@
         var scroll = null;
         var items = [];
         var list = [];
-        var html = $('<div class="rt-wrap"></div>');
+        var html = $('<div class="rss-wrap"></div>');
         var active = -1;
 
         this.create = function () {
@@ -117,13 +91,13 @@
             network = new Lampa.Reguest();
             network.timeout(20000);
 
-            html.append('<div class="rt-head"></div>');
+            html.append('<div class="rss-head"></div>');
 
-            var body = $('<div class="rt-body"></div>');
+            var body = $('<div class="rss-body"></div>');
             html.append(body);
 
             scroll = new Lampa.Scroll({ mask: true });
-            scroll.minus(html.find('.rt-head'));
+            scroll.minus(html.find('.rss-head'));
             body.append(scroll.render(true));
 
             this.fetch();
@@ -134,8 +108,8 @@
         this.fetch = function () {
             var self = this;
 
-            // Попытка 1: Через встроенный менеджер запросов Lampa (silent автоматически подключает прокси Lampa)
-            network.silent(FEED_URL, function (text) {
+            // Попытка 1: Встроенный прокси Lampa
+            network.silent(RSS_URL, function (text) {
                 var parsed = parseFeed(text);
                 if (parsed && parsed.length) {
                     list = parsed;
@@ -150,17 +124,17 @@
 
         this.fetchBackup = function () {
             var self = this;
-            // Попытка 2: Резервный публичный CORS-прокси
+            // Попытка 2: Публичный CORS-прокси
             network.silent(PROXY_URL, function (text) {
                 var parsed = parseFeed(text);
                 if (!parsed || !parsed.length) {
-                    self.fail('В ленте нет эпизодов');
+                    self.fail('В ленте не найдено аудиофайлов');
                     return;
                 }
                 list = parsed;
                 self.build();
             }, function () {
-                self.fail('Не удалось загрузить ленту Радио-Т');
+                self.fail('Ошибка загрузки RSS-ленты');
             }, false, { dataType: 'text' });
         };
 
@@ -171,18 +145,17 @@
                 this.append(list[i], i);
             }
 
-            this.activity.loader(false);
             this.activity.toggle();
         };
 
         this.append = function (ep, index) {
-            var item = $('<div class="rt-item selector layer--visible"></div>');
+            var item = $('<div class="rss-item selector layer--visible"></div>');
 
-            item.append('<div class="rt-item__num">' + String(index + 1).pad(3) + '</div>');
-            item.append('<div class="rt-item__body"><div class="rt-item__title"></div><div class="rt-item__date"></div></div>');
+            item.append('<div class="rss-item__num">' + String(index + 1) + '</div>');
+            item.append('<div class="rss-item__body"><div class="rss-item__title"></div><div class="rss-item__date"></div></div>');
 
-            item.find('.rt-item__title').text(ep.title);
-            item.find('.rt-item__date').text(
+            item.find('.rss-item__title').text(ep.title);
+            item.find('.rss-item__date').text(
                 [fmtDate(ep.date), ep.duration].filter(Boolean).join(' · ')
             );
 
@@ -190,7 +163,7 @@
                 active = index;
                 this.cover(ep);
                 item.addClass('focus');
-                Lampa.Background.change(COVER);
+                if (ep.cover) Lampa.Background.change(ep.cover);
                 scroll.update(item);
             }).bind(this));
 
@@ -210,43 +183,41 @@
         };
 
         this.cover = function (ep) {
-            var desc = clearText(ep.description).slice(0, 220);
+            var desc = clearText(ep.description).slice(0, 250);
 
-            html.find('.rt-head').html(
-                '<div class="rt-head__title"></div>' +
-                '<div class="rt-head__sub"></div>' +
-                '<div class="rt-head__desc"></div>'
+            html.find('.rss-head').html(
+                '<div class="rss-head__title"></div>' +
+                '<div class="rss-head__sub"></div>' +
+                '<div class="rss-head__desc"></div>'
             );
-            html.find('.rt-head__title').text(ep.title);
-            html.find('.rt-head__sub').text([
+            html.find('.rss-head__title').text(ep.title);
+            html.find('.rss-head__sub').text([
                 fmtDate(ep.date),
                 ep.duration
             ].filter(Boolean).join(' · '));
-            html.find('.rt-head__desc').text(desc);
+            html.find('.rss-head__desc').text(desc);
         };
 
         this.play = function (ep) {
+            // Запуск аудио через стандартный плеер Lampa
             Lampa.Player.play({
                 title: ep.title,
-                url: ep.url
+                url: ep.url,
+                cover: ep.cover
             });
 
+            // Формируем плейлист для переключения между треками в плеере
             Lampa.Player.playlist(list.map(function (a) {
                 return {
                     title: a.title,
-                    url: a.url
+                    url: a.url,
+                    cover: a.cover
                 };
             }));
         };
 
-        this.background = function () {
-            Lampa.Background.immediately(COVER);
-        };
-
         this.start = function () {
             if (Lampa.Activity.active() && Lampa.Activity.active().activity !== this.activity) return;
-
-            this.background();
 
             Lampa.Controller.add('content', {
                 link: this,
@@ -264,7 +235,6 @@
         };
 
         this.pause = function () {};
-
         this.stop = function () {};
 
         this.render = function () {
@@ -290,22 +260,22 @@
 
     function addStyle() {
         var css = '' +
-            '.rt-wrap{position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.2)}' +
-            '.rt-head{position:absolute;top:0;left:0;right:0;padding:26px 34px 16px;z-index:5;' +
-            'background:linear-gradient(to bottom,rgba(0,0,0,.6),transparent)}' +
-            '.rt-head__title{font-size:26px;font-weight:700;color:#fff}' +
-            '.rt-head__sub{font-size:14px;color:rgba(255,255,255,.6);margin-top:6px}' +
-            '.rt-head__desc{font-size:13px;color:rgba(255,255,255,.75);margin-top:8px;max-width:900px;line-height:1.4}' +
-            '.rt-body{position:absolute;top:120px;left:0;right:0;bottom:0}' +
-            '.rt-item{display:flex;align-items:center;padding:13px 34px;cursor:pointer;transition:background .15s}' +
-            '.rt-item.focus,.rt-item:focus{background:rgba(255,255,255,.12)}' +
-            '.rt-item__num{width:58px;color:rgba(255,255,255,.45);font-size:15px;font-variant-numeric:tabular-nums}' +
-            '.rt-item__body{flex:1;min-width:0}' +
-            '.rt-item__title{font-size:18px;color:#fafafa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-            '.rt-item__date{font-size:13px;color:rgba(255,255,255,.5);margin-top:3px}';
+            '.rss-wrap{position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4)}' +
+            '.rss-head{position:absolute;top:0;left:0;right:0;padding:26px 34px 16px;z-index:5;' +
+            'background:linear-gradient(to bottom,rgba(0,0,0,.8),transparent)}' +
+            '.rss-head__title{font-size:24px;font-weight:700;color:#fff}' +
+            '.rss-head__sub{font-size:14px;color:rgba(255,255,255,.6);margin-top:6px}' +
+            '.rss-head__desc{font-size:13px;color:rgba(255,255,255,.75);margin-top:8px;max-width:900px;line-height:1.4}' +
+            '.rss-body{position:absolute;top:130px;left:0;right:0;bottom:0}' +
+            '.rss-item{display:flex;align-items:center;padding:12px 34px;cursor:pointer;transition:background .15s}' +
+            '.rss-item.focus,.rss-item:focus{background:rgba(255,255,255,.15)}' +
+            '.rss-item__num{width:45px;color:rgba(255,255,255,.45);font-size:15px}' +
+            '.rss-item__body{flex:1;min-width:0}' +
+            '.rss-item__title{font-size:17px;color:#fafafa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+            '.rss-item__date{font-size:12px;color:rgba(255,255,255,.5);margin-top:3px}';
 
         var style = document.createElement('style');
-        style.id = 'rt_podcast_style';
+        style.id = 'rss_audio_player_style';
         style.textContent = css;
         document.head.appendChild(style);
     }
@@ -313,10 +283,10 @@
     function addMenu() {
         var button = $('<li class="menu__item selector">' +
             '<div class="menu__ico">' +
-            '<svg width="38" height="31" viewBox="0 0 38 31" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-            '<rect x="17.613" width="3" height="16.3327" rx="1.5" transform="rotate(63.4707 17.613 0)" fill="currentColor"/>' +
-            '<circle cx="13" cy="19" r="6" fill="currentColor"/>' +
-            '<path fill-rule="evenodd" clip-rule="evenodd" d="M0 11C0 8.79086 1.79083 7 4 7H34C36.2091 7 38 8.79086 38 11V27C38 29.2091 36.2092 31 34 31H4C1.79083 31 0 29.2091 0 27V11ZM21 19C21 23.4183 17.4183 27 13 27C8.58173 27 5 23.4183 5 19C5 14.5817 8.58173 11 13 11C17.4183 11 21 14.5817 21 19ZM30.5 18C31.8807 18 33 16.8807 33 15.5C33 14.1193 31.8807 13 30.5 13C29.1193 13 28 14.1193 28 15.5C28 16.8807 29.1193 18 30.5 18Z" fill="currentColor"/>' +
+            '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+            '<path d="M9 18V5l12-2v13M9 9l12-2"/>' +
+            '<circle cx="6" cy="18" r="3"/>' +
+            '<circle cx="18" cy="16" r="3"/>' +
             '</svg>' +
             '</div>' +
             '<div class="menu__text">' + NAME + '</div>' +
@@ -334,7 +304,6 @@
         var listEl = $('.menu .menu__list').eq(0);
         if (listEl.length) listEl.append(button);
         else $('body').append(button);
-        console.log('Plugins', NAME + ' init');
     }
 
     function start() {
@@ -343,8 +312,8 @@
         addMenu();
     }
 
-    if (window.plugin_rt_podcast_ready) return;
-    window.plugin_rt_podcast_ready = true;
+    if (window.plugin_rss_audio_ready) return;
+    window.plugin_rss_audio_ready = true;
 
     if (window.appready) start();
     else Lampa.Listener.follow('app', function (e) {
