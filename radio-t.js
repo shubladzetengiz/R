@@ -1,317 +1,345 @@
-//name: RSS Аудио Плеер
-//version: 1.0.1
-//author: Custom
-//description: Парсер RSS-лент с воспроизведением аудио во встроенном плеере Lampa
-
+/* Radio-T Podcast Plugin v1.0.0 */
 (function () {
-    'use strict';
+  'use strict';
 
-    var NAME = 'Аудио RSS';
-    var COMPONENT = 'rss_audio_player';
-    
-    // -------------------------------------------------------------
-    var RSS_URL = 'https://feeds.rucast.net/radio-t'; 
-    var DEFAULT_COVER = 'https://lampa.mx/img/img_broken.svg';
-    // -------------------------------------------------------------
+  var NAME = 'Radio-T';
+  var COMPONENT = 'radio_t_main';
 
-    var PROXY_URL = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(RSS_URL);
+  var DEFAULT_COVER = 'https://radio-t.com/images/covers/cover.png';
+  var DEFAULTS = {
+    radio_t_rss_url: 'https://radio-t.com/podcast.rss',
+    radio_t_auto: 'on',
+    radio_t_interval: '30'
+  };
 
-    function parseFeed(text) {
-        var list = [];
-        if (!text) return list;
+  var FEED_PROXIES = [
+    'https://api.allorigins.win/raw?url=',
+    'https://corsproxy.io/?url=',
+    'https://api.codetabs.com/v1/proxy?quest='
+  ];
 
-        var doc;
-        try {
-            doc = new DOMParser().parseFromString(text, 'text/xml');
-        } catch (e) {
-            return list;
+  function get(key) { return Lampa.Storage.get(key, DEFAULTS[key]); }
+
+  function esc(str) {
+    return String(str == null ? '' : str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function childText(node, tag) {
+    var el = node.getElementsByTagName(tag)[0];
+    return el ? (el.textContent || el.text || '').trim() : '';
+  }
+
+  function clearText(value) {
+    return String(value || '')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function fmtDate(value) {
+    var d = new Date(value || '');
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+
+  function parseFeed(text) {
+    var list = [];
+    if (!text) return list;
+    var doc;
+    try { doc = new DOMParser().parseFromString(text, 'text/xml'); } catch (e) { return list; }
+    if (!doc || !doc.querySelectorAll) return list;
+
+    var nodes = doc.querySelectorAll('item');
+
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      var enc = node.getElementsByTagName('enclosure')[0];
+      var audioUrl = enc ? enc.getAttribute('url') : '';
+      if (!audioUrl) continue;
+
+      var imgEl = node.getElementsByTagName('itunes:image')[0];
+      var cover = imgEl ? (imgEl.getAttribute('href') || imgEl.getAttribute('url')) : DEFAULT_COVER;
+
+      list.push({
+        title: childText(node, 'title') || 'Без названия',
+        date: childText(node, 'pubDate'),
+        description: clearText(childText(node, 'description')),
+        url: audioUrl,
+        cover: cover
+      });
+    }
+
+    return list;
+  }
+
+  function parseMeta(text) {
+    var meta = { title: NAME, image: DEFAULT_COVER };
+    if (!text) return meta;
+    var doc;
+    try { doc = new DOMParser().parseFromString(text, 'text/xml'); } catch (e) { return meta; }
+    var channel = doc && doc.querySelector ? doc.querySelector('channel') : null;
+    if (!channel) return meta;
+    var t = channel.getElementsByTagName('title')[0];
+    if (t) meta.title = (t.textContent || '').trim();
+    var img = channel.getElementsByTagName('itunes:image')[0];
+    if (img) meta.image = img.getAttribute('href') || img.getAttribute('url') || DEFAULT_COVER;
+    return meta;
+  }
+
+  async function fetchFeed() {
+    var url = get('radio_t_rss_url') || DEFAULTS.radio_t_rss_url;
+    var errors = [];
+
+    try {
+      var res = await fetch(url);
+      if (res.ok) {
+        var text = await res.text();
+        if (parseFeed(text).length) return text;
+        errors.push('feed empty');
+      } else {
+        errors.push('HTTP ' + res.status);
+      }
+    } catch (e) { errors.push(e.message); }
+
+    for (var i = 0; i < FEED_PROXIES.length; i++) {
+      try {
+        var res2 = await fetch(FEED_PROXIES[i] + encodeURIComponent(url));
+        if (res2.ok) {
+          var text2 = await res2.text();
+          if (parseFeed(text2).length) return text2;
+        } else {
+          errors.push('HTTP ' + res2.status);
         }
-
-        if (!doc || !doc.querySelectorAll) return list;
-
-        var nodes = doc.querySelectorAll('item');
-
-        for (var i = 0; i < nodes.length; i++) {
-            var node = nodes[i];
-            
-            var enc = node.getElementsByTagName('enclosure')[0] || node.getElementsByTagName('media:content')[0];
-            var audioUrl = enc ? enc.getAttribute('url') : '';
-
-            if (!audioUrl) continue;
-
-            var imgEl = node.getElementsByTagName('itunes:image')[0] || node.getElementsByTagName('media:thumbnail')[0];
-            var image = imgEl ? (imgEl.getAttribute('href') || imgEl.getAttribute('url')) : DEFAULT_COVER;
-
-            list.push({
-                title: childText(node, 'title') || 'Без названия',
-                date: childText(node, 'pubDate'),
-                duration: childText(node, 'itunes:duration') || childText(node, 'duration'),
-                description: childText(node, 'description'),
-                url: audioUrl,
-                cover: image
-            });
-        }
-
-        return list;
+      } catch (e) { errors.push(e.message); }
     }
 
-    function childText(node, tag) {
-        var el = node.getElementsByTagName(tag)[0];
-        return el ? (el.textContent || el.text || '').trim() : '';
+    throw new Error(errors.join(' | ') || 'RSS недоступен');
+  }
+
+  var _body = null;
+  var _timer = null;
+
+  class RadioTMain {
+    constructor(object) { this.activity = object; }
+
+    render() {
+      this.html = $('<div class="radio-t-container"></div>');
+      _body = this.html;
+      this.load(false);
+      return this.html[0];
     }
 
-    function clearText(value) {
-        return String(value || '')
-            .replace(/<[^>]*>/g, ' ')
-            .replace(/https?:\/\/\S+/gi, '')
-            .replace(/\s+/g, ' ')
-            .trim();
+    create() { return this.render(); }
+
+    start() { this.scheduleAutoRefresh(); }
+    pause() {}
+    stop() { clearInterval(_timer); _timer = null; }
+
+    destroy() {
+      clearInterval(_timer);
+      _timer = null;
+      _body = null;
     }
 
-    function fmtDate(value) {
-        var d = new Date(value || '');
-        if (isNaN(d.getTime())) return '';
-        return d.toLocaleDateString();
+    scheduleAutoRefresh() {
+      clearInterval(_timer);
+      _timer = null;
+      if (get('radio_t_auto') === 'off') return;
+      var mins = parseInt(get('radio_t_interval') || '30', 10) || 30;
+      _timer = setInterval((function () {
+        this.load(true);
+      }).bind(this), mins * 60 * 1000);
     }
 
-    function Component() {
-        var network = null;
-        var scroll = null;
-        var items = [];
-        var list = [];
-        var html = $('<div class="rss-wrap"></div>');
-        var active = -1;
-
-        this.create = function () {
-            this.activity.loader(true);
-
-            network = new Lampa.Reguest();
-            network.timeout(20000);
-
-            html.append('<div class="rss-head"></div>');
-
-            var body = $('<div class="rss-body"></div>');
-            html.append(body);
-
-            scroll = new Lampa.Scroll({ mask: true });
-            scroll.minus(html.find('.rss-head'));
-            body.append(scroll.render(true));
-
-            this.fetch();
-
-            return this.render();
-        };
-
-        this.fetch = function () {
-            var self = this;
-
-            // Запрос через native с типом text
-            network.native(RSS_URL, function (text) {
-                var parsed = parseFeed(text);
-                if (parsed && parsed.length) {
-                    list = parsed;
-                    self.build();
-                } else {
-                    self.fetchBackup();
-                }
-            }, function () {
-                self.fetchBackup();
-            }, false, { dataType: 'text' });
-        };
-
-        this.fetchBackup = function () {
-            var self = this;
-
-            network.native(PROXY_URL, function (text) {
-                var parsed = parseFeed(text);
-                if (!parsed || !parsed.length) {
-                    self.fail('В ленте не найдено аудиофайлов');
-                    return;
-                }
-                list = parsed;
-                self.build();
-            }, function () {
-                self.fail('Ошибка загрузки RSS-ленты');
-            }, false, { dataType: 'text' });
-        };
-
-        this.build = function () {
-            this.activity.loader(false);
-
-            for (var i = 0; i < list.length; i++) {
-                this.append(list[i], i);
-            }
-
-            this.activity.toggle();
-        };
-
-        this.append = function (ep, index) {
-            var item = $('<div class="rss-item selector layer--visible"></div>');
-
-            item.append('<div class="rss-item__num">' + String(index + 1) + '</div>');
-            item.append('<div class="rss-item__body"><div class="rss-item__title"></div><div class="rss-item__date"></div></div>');
-
-            item.find('.rss-item__title').text(ep.title);
-            item.find('.rss-item__date').text(
-                [fmtDate(ep.date), ep.duration].filter(Boolean).join(' · ')
-            );
-
-            item.on('hover:hover hover:focus', (function () {
-                active = index;
-                this.cover(ep);
-                item.addClass('focus');
-                if (ep.cover) Lampa.Background.change(ep.cover);
-                scroll.update(item);
-            }).bind(this));
-
-            item.on('hover:out', function () {
-                item.removeClass('focus');
-            });
-
-            item.on('hover:enter', (function () {
-                active = index;
-                this.play(ep);
-            }).bind(this));
-
-            if (Lampa.Controller.own(this)) Lampa.Controller.collectionAppend(item);
-
-            scroll.append(item);
-            items.push(item);
-        };
-
-        this.cover = function (ep) {
-            var desc = clearText(ep.description).slice(0, 250);
-
-            html.find('.rss-head').html(
-                '<div class="rss-head__title"></div>' +
-                '<div class="rss-head__sub"></div>' +
-                '<div class="rss-head__desc"></div>'
-            );
-            html.find('.rss-head__title').text(ep.title);
-            html.find('.rss-head__sub').text([
-                fmtDate(ep.date),
-                ep.duration
-            ].filter(Boolean).join(' · '));
-            html.find('.rss-head__desc').text(desc);
-        };
-
-        this.play = function (ep) {
-            Lampa.Player.play({
-                title: ep.title,
-                url: ep.url,
-                cover: ep.cover
-            });
-
-            Lampa.Player.playlist(list.map(function (a) {
-                return {
-                    title: a.title,
-                    url: a.url,
-                    cover: a.cover
-                };
-            }));
-        };
-
-        this.start = function () {
-            if (Lampa.Activity.active() && Lampa.Activity.active().activity !== this.activity) return;
-
-            Lampa.Controller.add('content', {
-                link: this,
-                invisible: true,
-                toggle: (function () {
-                    Lampa.Controller.collectionSet(html);
-                    Lampa.Controller.collectionFocus(active >= 0 && items[active] ? items[active] : null, html);
-                }).bind(this),
-                back: function () {
-                    Lampa.Activity.backward();
-                }
-            });
-
-            Lampa.Controller.toggle('content');
-        };
-
-        this.pause = function () {};
-        this.stop = function () {};
-
-        this.render = function () {
-            return html;
-        };
-
-        this.destroy = function () {
-            if (network) network.clear();
-            if (scroll) scroll.destroy();
-            Lampa.Arrays.destroy(items);
-            html.remove();
-        };
-
-        this.fail = function (msg) {
-            this.activity.loader(false);
-            var empty = new Lampa.Empty();
-            empty.text(msg);
-            html.append(empty.render());
-            this.start = empty.start.bind(empty);
-            this.activity.toggle();
-        };
+    showLoading() {
+      this.html.empty().append(
+        '<div class="radio-t-loading">Загрузка выпусков...</div>'
+      );
     }
 
-    function addStyle() {
-        var css = '' +
-            '.rss-wrap{position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4)}' +
-            '.rss-head{position:absolute;top:0;left:0;right:0;padding:26px 34px 16px;z-index:5;' +
-            'background:linear-gradient(to bottom,rgba(0,0,0,.8),transparent)}' +
-            '.rss-head__title{font-size:24px;font-weight:700;color:#fff}' +
-            '.rss-head__sub{font-size:14px;color:rgba(255,255,255,.6);margin-top:6px}' +
-            '.rss-head__desc{font-size:13px;color:rgba(255,255,255,.75);margin-top:8px;max-width:900px;line-height:1.4}' +
-            '.rss-body{position:absolute;top:130px;left:0;right:0;bottom:0}' +
-            '.rss-item{display:flex;align-items:center;padding:12px 34px;cursor:pointer;transition:background .15s}' +
-            '.rss-item.focus,.rss-item:focus{background:rgba(255,255,255,.15)}' +
-            '.rss-item__num{width:45px;color:rgba(255,255,255,.45);font-size:15px}' +
-            '.rss-item__body{flex:1;min-width:0}' +
-            '.rss-item__title{font-size:17px;color:#fafafa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-            '.rss-item__date{font-size:12px;color:rgba(255,255,255,.5);margin-top:3px}';
-
-        var style = document.createElement('style');
-        style.id = 'rss_audio_player_style';
-        style.textContent = css;
-        document.head.appendChild(style);
+    showError(msg) {
+      this.html.empty().append(
+        '<div class="radio-t-loading">Ошибка загрузки: ' + esc(msg) +
+        '<div class="radio-t-btn selector" data-action="refresh">⟳ Попробовать снова</div></div>'
+      );
+      this.html.find('[data-action="refresh"]').on('hover:enter', (function () {
+        this.load(false);
+      }).bind(this));
+      Lampa.Controller.toggle('content');
     }
 
-    function addMenu() {
-        var button = $('<li class="menu__item selector">' +
-            '<div class="menu__ico">' +
-            '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
-            '<path d="M9 18V5l12-2v13M9 9l12-2"/>' +
-            '<circle cx="6" cy="18" r="3"/>' +
-            '<circle cx="18" cy="16" r="3"/>' +
-            '</svg>' +
-            '</div>' +
-            '<div class="menu__text">' + NAME + '</div>' +
-            '</li>');
-
-        button.on('hover:enter', function () {
-            Lampa.Activity.push({
-                url: '',
-                title: NAME,
-                component: COMPONENT,
-                page: 1
-            });
-        });
-
-        var listEl = $('.menu .menu__list').eq(0);
-        if (listEl.length) listEl.append(button);
-        else $('body').append(button);
+    async load(silent) {
+      if (!silent) this.showLoading();
+      try {
+        var text = await fetchFeed();
+        this.renderFeed(text);
+      } catch (e) {
+        if (silent) Lampa.Noty.show('Radio-T: не удалось обновить (' + e.message + ')');
+        else this.showError(e.message);
+      }
     }
 
-    function start() {
-        Lampa.Component.add(COMPONENT, Component);
-        addStyle();
-        addMenu();
+    renderFeed(text) {
+      var list = parseFeed(text);
+      if (!list.length) { this.showError('В ленте не найдено аудиофайлов'); return; }
+
+      var meta = parseMeta(text);
+
+      var rows = list.map(function (ep, i) {
+        return '<div class="radio-t-ep selector" data-idx="' + i + '">' +
+          '<img class="radio-t-ep__cover" src="' + esc(ep.cover) + '" onerror="this.style.display=\'none\'">' +
+          '<div class="radio-t-ep__body">' +
+          '<div class="radio-t-ep__title">' + esc(ep.title) + '</div>' +
+          '<div class="radio-t-ep__meta">' + esc(fmtDate(ep.date)) + '</div>' +
+          '</div>' +
+          '<div class="radio-t-ep__play">▶</div>' +
+          '</div>';
+      }).join('');
+
+      this.html.empty().append(
+        '<div class="radio-t-wrap">' +
+        '<div class="radio-t-head">' +
+        '<img class="radio-t-head__cover" src="' + esc(meta.image) + '" onerror="this.style.display=\'none\'">' +
+        '<div class="radio-t-head__info">' +
+        '<div class="radio-t-head__title">' + esc(meta.title) + '</div>' +
+        '<div class="radio-t-head__sub">' + list.length + ' выпусков · обновлено ' +
+        new Date().toLocaleTimeString() + '</div>' +
+        '</div>' +
+        '<div class="radio-t-btn selector" data-action="refresh">⟳ Обновить</div>' +
+        '</div>' +
+        '<div class="radio-t-list">' + rows + '</div>' +
+        '</div>'
+      );
+
+      this.html.find('[data-action="refresh"]').on('hover:enter', (function () {
+        this.load(true);
+      }).bind(this));
+
+      this.html.find('[data-idx]').on('hover:enter', (function () {
+        var ep = list[$(this).data('idx')];
+        if (ep) this.play(ep, list);
+      }).bind(this));
+
+      Lampa.Controller.toggle('content');
     }
 
-    if (window.plugin_rss_audio_ready) return;
-    window.plugin_rss_audio_ready = true;
+    play(ep, list) {
+      Lampa.Player.play({
+        url: ep.url,
+        title: ep.title,
+        cover: ep.cover
+      });
 
-    if (window.appready) start();
-    else Lampa.Listener.follow('app', function (e) {
-        if (e.type == 'ready') start();
+      Lampa.Player.playlist(list.map(function (a) {
+        return { url: a.url, title: a.title, cover: a.cover };
+      }));
+    }
+  }
+
+  function injectStyles() {
+    if (document.getElementById('radio-t-styles')) return;
+
+    var style = document.createElement('style');
+    style.id = 'radio-t-styles';
+    style.textContent = '\
+.radio-t-container{width:100%;height:100%;overflow:hidden}\
+.radio-t-wrap{display:flex;flex-direction:column;height:100%}\
+.radio-t-head{display:flex;align-items:center;gap:1em;padding:1em 1.5em 0.5em;flex-shrink:0}\
+.radio-t-head__cover{width:3.4em;height:3.4em;object-fit:cover;border-radius:0.5em;flex-shrink:0}\
+.radio-t-head__info{flex:1;min-width:0}\
+.radio-t-head__title{color:#fff;font-size:1.3em;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\
+.radio-t-head__sub{color:rgba(255,255,255,.5);font-size:0.85em;margin-top:0.2em}\
+.radio-t-btn{flex-shrink:0;padding:0.5em 1.2em;border-radius:0.5em;background:rgba(255,255,255,.08);color:#fff;font-size:0.95em;cursor:pointer;white-space:nowrap}\
+.radio-t-btn.focus{background:rgba(255,255,255,.28)}\
+.radio-t-list{flex:1;overflow-y:auto;padding:0.3em 1.5em 2em}\
+.radio-t-ep{display:flex;align-items:center;gap:1em;padding:0.6em 1em;margin-bottom:0.2em;border-radius:0.5em;cursor:pointer}\
+.radio-t-ep.focus{background:rgba(255,255,255,.15)}\
+.radio-t-ep__cover{width:3em;height:3em;object-fit:cover;border-radius:0.35em;flex-shrink:0}\
+.radio-t-ep__body{flex:1;min-width:0}\
+.radio-t-ep__title{color:#fff;font-size:1.05em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\
+.radio-t-ep__meta{color:rgba(255,255,255,.45);font-size:0.85em;margin-top:0.15em}\
+.radio-t-ep__play{color:rgba(255,255,255,.6);font-size:1.1em;flex-shrink:0}\
+.radio-t-loading{color:rgba(255,255,255,.5);font-size:1.05em;padding:3em 1.5em;display:flex;flex-direction:column;gap:1.5em;align-items:flex-start}\
+';
+    document.head.appendChild(style);
+  }
+
+  function registerSettings() {
+    Lampa.SettingsApi.addComponent({
+      component: 'radio_t',
+      icon: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>',
+      name: 'Radio-T'
     });
+
+    Lampa.SettingsApi.addParam({
+      component: 'radio_t',
+      param: { name: 'radio_t_rss_url', type: 'trigger', default: false },
+      field: { name: 'RSS URL', description: get('radio_t_rss_url') },
+      onChange: function () {
+        var current = get('radio_t_rss_url');
+        var done = function (v) {
+          if (v && v.trim()) Lampa.Storage.set('radio_t_rss_url', v.trim());
+        };
+        if (Lampa.Keypad && typeof Lampa.Keypad.show === 'function') {
+          Lampa.Keypad.show({ title: 'RSS URL', value: current, confirm: done });
+        } else if (window.prompt) {
+          var r = window.prompt('RSS URL:', current);
+          if (r !== null) done(r);
+        }
+      }
+    });
+
+    Lampa.SettingsApi.addParam({
+      component: 'radio_t',
+      param: { name: 'radio_t_auto', type: 'select', values: { on: 'Включено', off: 'Выключено' }, default: 'on' },
+      field: { name: 'Автообновление списка' },
+      onChange: function () {}
+    });
+
+    Lampa.SettingsApi.addParam({
+      component: 'radio_t',
+      param: {
+        name: 'radio_t_interval',
+        type: 'select',
+        values: { '10': '10 минут', '30': '30 минут', '60': '1 час', '120': '2 часа' },
+        default: '30'
+      },
+      field: { name: 'Интервал автообновления' },
+      onChange: function () {}
+    });
+  }
+
+  function addMenu() {
+    var icon = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>';
+    var item = $('<li class="menu__item selector" data-action="radio_t">' +
+      '<div class="menu__ico">' + icon + '</div>' +
+      '<div class="menu__text">Radio-T</div></li>');
+
+    item.on('hover:enter', function () {
+      Lampa.Activity.push({ component: COMPONENT, url: '', title: NAME });
+    });
+
+    var settingsItem = $('.menu .menu__list .menu__item[data-action="settings"]');
+    if (settingsItem.length) settingsItem.before(item);
+    else $('.menu .menu__list').eq(0).append(item);
+  }
+
+  function init() {
+    Lampa.Component.add(COMPONENT, RadioTMain);
+    injectStyles();
+    registerSettings();
+    addMenu();
+  }
+
+  if (window.appready) {
+    init();
+  } else {
+    Lampa.Listener.follow('app', function (e) {
+      if (e.type === 'ready') init();
+    });
+  }
 })();
