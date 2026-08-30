@@ -1,4 +1,4 @@
-/* Radio-T Podcast Plugin v1.0.0 */
+/* Radio-T Podcast Plugin v1.0.1 */
 (function () {
   'use strict';
 
@@ -13,9 +13,7 @@
   };
 
   var FEED_PROXIES = [
-    'https://api.allorigins.win/raw?url=',
-    'https://corsproxy.io/?url=',
-    'https://api.codetabs.com/v1/proxy?quest='
+    'https://cors.eu.org/'
   ];
 
   function get(key) { return Lampa.Storage.get(key, DEFAULTS[key]); }
