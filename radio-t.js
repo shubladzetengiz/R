@@ -1,4 +1,4 @@
-/* Radio-T Podcast Plugin v1.1.0 */
+/* Radio-T Podcast Plugin v1.1.1 */
 (function () {
   'use strict';
 
@@ -249,10 +249,12 @@
         this.load(true);
       }).bind(this));
 
-      this.html.find('[data-idx]').on('hover:enter', (function () {
-        var ep = list[$(this).data('idx')];
-        if (ep) this.play(ep, list);
-      }).bind(this));
+      var self = this;
+      this.html.find('[data-idx]').on('hover:enter', function () {
+        var idx = $(this).data('idx');
+        var ep = list[idx];
+        if (ep) self.play(ep, list);
+      });
 
       Lampa.Controller.toggle('content');
     }
