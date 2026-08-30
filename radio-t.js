@@ -1,4 +1,4 @@
-/* Radio-T Podcast Plugin v1.0.1 */
+/* Radio-T Podcast Plugin v1.1.0 */
 (function () {
   'use strict';
 
@@ -88,34 +88,59 @@
     return meta;
   }
 
+  var FETCH_TIMEOUT = 8000;
+  var CACHE_KEY = 'radio_t_cache';
+
+  function fetchWithTimeout(url) {
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, FETCH_TIMEOUT) : null;
+    return fetch(url, controller ? { signal: controller.signal } : undefined)
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.text();
+      })
+      .then(function (text) {
+        if (timer) clearTimeout(timer);
+        if (!parseFeed(text).length) throw new Error('feed empty');
+        return text;
+      })
+      .catch(function (e) {
+        if (timer) clearTimeout(timer);
+        throw e;
+      });
+  }
+
+  function candidates(url) {
+    var list = [url];
+    for (var i = 0; i < FEED_PROXIES.length; i++) {
+      list.push(FEED_PROXIES[i] + encodeURIComponent(url));
+    }
+    return list;
+  }
+
   async function fetchFeed() {
     var url = get('radio_t_rss_url') || DEFAULTS.radio_t_rss_url;
-    var errors = [];
+    var urls = candidates(url);
+    var lastErr = null;
 
-    try {
-      var res = await fetch(url);
-      if (res.ok) {
-        var text = await res.text();
-        if (parseFeed(text).length) return text;
-        errors.push('feed empty');
-      } else {
-        errors.push('HTTP ' + res.status);
-      }
-    } catch (e) { errors.push(e.message); }
-
-    for (var i = 0; i < FEED_PROXIES.length; i++) {
-      try {
-        var res2 = await fetch(FEED_PROXIES[i] + encodeURIComponent(url));
-        if (res2.ok) {
-          var text2 = await res2.text();
-          if (parseFeed(text2).length) return text2;
-        } else {
-          errors.push('HTTP ' + res2.status);
+    return Promise.all(urls.map(function (u) {
+      return fetchWithTimeout(u).then(function (text) {
+        return text;
+      }).catch(function (e) {
+        lastErr = e;
+        return null;
+      });
+    })).then(function (results) {
+      for (var i = 0; i < results.length; i++) {
+        if (results[i]) {
+          Lampa.Storage.set(CACHE_KEY, results[i]);
+          return results[i];
         }
-      } catch (e) { errors.push(e.message); }
-    }
-
-    throw new Error(errors.join(' | ') || 'RSS недоступен');
+      }
+      var cached = Lampa.Storage.get(CACHE_KEY, '');
+      if (cached && parseFeed(cached).length) return cached;
+      throw new Error(lastErr ? lastErr.message : 'RSS недоступен');
+    });
   }
 
   var _body = null;
@@ -171,7 +196,14 @@
     }
 
     async load(silent) {
-      if (!silent) this.showLoading();
+      if (!silent) {
+        var cached = Lampa.Storage.get(CACHE_KEY, '');
+        if (cached && parseFeed(cached).length) {
+          this.renderFeed(cached);
+        } else {
+          this.showLoading();
+        }
+      }
       try {
         var text = await fetchFeed();
         this.renderFeed(text);
